@@ -45,7 +45,7 @@ CONF_THR = 0.003    # 30-bar return must exceed 0.3%
 DIP_N = 60          # dip reference: simple average of this many closes
 DIP_PCT = 0.005     # close must be 0.5% below that average
 DIP_TURN = 10       # ... and above the close this many bars ago
-HOLD_BARS = 177     # bars to hold a position before selling it all
+HOLD_BARS = 180     # bars to hold a position before selling it all
 
 closes = []         # CBBTC closes, in arrival order (ints, price_scale 5)
 entry_seq = -1      # seq of the batch the current position was entered on
