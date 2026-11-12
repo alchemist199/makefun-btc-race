@@ -1,92 +1,126 @@
-# BTC race bot — TP variant (candidate resubmission, NOT yet submitted)
+# BTC race bot — robust long-only trend + dip, fixed-hold exits
 
-Variant of the submitted entry (dev +$7.85, official server grade
-+$7.850560). The ONLY changes: a take-profit exit (+0.5%) and a longer
-hold cap (180 -> 240 bars). Entry signals, sizing and protocol use are
-identical. All code here was written from scratch; no other entrant's
-code was read or copied (only the public leaderboard descriptions were
-used as inspiration for which strategy families to test).
+Bot for the make.fun bounty `btc-race-24h-20261112-1439` ("Race a BTC trading
+bot live for 24 hours"). Python 3.13, standard library only. Entry point is
+`main.py`; it talks the `agent-fun/bars-replay/v1` protocol through the kit
+Python shim, copied byte-for-byte into `vendor/makefun_bars.py` (the shim is
+vendored so it does not count toward authorship).
 
-## Result (dev window, 24h, BTC -2.30%)
+## Strategy
 
-|                     | submitted entry | this variant |
-|---|---|---|
-| net PnL             | +$7.85          | **+$11.28**  |
-| trades              | 5               | 9            |
-| fees                | $2.42           | $4.03        |
-| max drawdown        | -0.77%          | -0.73%       |
-| H1 (first 12h)      | +$8.95          | +$13.19      |
-| H2 (second 12h)     | +$0.11          | +$0.10       |
+All decisions use 1-minute closes of CBBTC. Long only, one position, every
+buy spends all cash. 7 parameters total, no lookup tables, no clock, no
+randomness, no network — two runs on the same bars give the same orders.
 
-Trade log (simulator, fills at next bar's open):
-- buy bar 55 @ $73,910.73 -> TP sell bar 57 @ $74,292.72, +$4.76
-- buy bar 58 @ $74,119.84 -> TP sell bar 160 @ $74,595.67, +$6.04
-- buy bar 161 @ $74,634.12 -> hold sell bar 401 @ $74,537.94, -$1.70
-- buy bar 524 @ $73,582.33 -> TP sell bar 555 @ $73,910.53, +$4.09
-- buy bar 1434 @ $71,922.51 -> flatten at close, +$0.10
+**Entry (when flat) — either signal fires:**
 
-## Perturbation (+-20% on every parameter, 16 variants)
+- **Momentum:** 10-bar return > 0.5% **and** 30-bar return > 0.3%. The
+  30-bar confirmation is the key filter: the 10-bar trigger alone fires on
+  short-lived bounces inside a downtrend and loses money on the dev window
+  (−$12.48 at a 0.45% threshold); with confirmation the same trigger makes
+  +$6.43.
+- **Dip:** close > 0.5% below its 60-bar simple average **and** turning up
+  (close above the close 10 bars ago). Buys pullbacks and local bottoms,
+  not falling knives.
 
-All 16 stay positive. Worst: MOM_THR x1.2 -> +$5.24. Full table
-(`perturb.py` output): TP x0.8 +$6.33, TP x1.2 +$6.42, DIP_N x0.8
-+$7.60, DIP_TURN x1.2 +$7.89, HOLD x1.2 +$8.44, HOLD x0.8 +$9.31,
-DIP_PCT x1.2 +$7.60, MOM_THR x1.2 +$5.24, everything else +$11.28
-(unchanged trades) or +$11.29.
+**Exit (when holding):** sell the whole position 180 bars after entry. A
+fixed hold rides multi-hour trends and the chop after them. A trailing stop
+was tested and rejected: its width is knife-edge on the dev window — 0.24%
+and 0.36% both lose money while 0.30% wins — so it cannot be trusted on
+unseen prices. A fixed hold of 120–300 bars is positive across the whole
+range.
 
-CAVEATS, stated plainly:
-- TP is the most sensitive parameter: 0.5% gives $11.28, but 0.4% and
-  0.6% both give ~$6.40. They stay clearly positive (never negative),
-  so it passes the stated robustness rule, but the peak is not flat.
-- H2 is +$0.10 from the final-bar flatten fluke (same as the submitted
-  entry). Two perturbations give H2 exactly $0.00 (total PnL still
-  positive). H2 cannot be genuinely improved on this window: the second
-  half is a steady -2.33% grind with no bounce bigger than +0.13%/hour,
-  below the ~26bp round-trip cost of any trade.
-- Did NOT reach the $13.60 dev-top-10 threshold. This is the best found
-  across ~14,000 configurations (see below); $11.28 is the ceiling of
-  this strategy family on this window.
+Orders cap slippage at 100 bps from the latest close, as the kit baselines
+do.
 
-## Wire verification (`wiretest_v.py`)
+## What the dev window looked like
 
-- 1,440/1,440 replies, exit 0, stderr empty, ~0.3s total think time.
-- All 5 buy notionals and 4 sell quantities match the simulator exactly.
-- Two full wire runs byte-identical (deterministic).
-- "final cash $0.00" in the wire log is the known driver artifact (it
-  does not simulate the end flatten); the simulator's flatten gives
-  final cash $1,011.28.
+1,439 bars, first close $73,739.38 → last $72,044.01, **−2.30%** for the
+window. First half (12h): +0.09%, choppy, peaked near $74,689. Second half:
+**−2.33%**, a steady grind down with no sustained bounce (best 10-bar
+return in the half only +0.47%). 1-minute return stdev 0.05%; 237 flat bars;
+buy-and-hold max drawdown −3.94%; pool depth median ~$1.3M USDC. The best
+single long trade in the window was buying the bar-45 dip at $73,369 and
+selling near $74,689 (+1.80% gross, ~+$15.40 net).
 
-## What was searched (all in the local simulator, validated EXACT vs
-## the official harness and vs the server's +$7.850560)
+## Dev-window results (kit harness fill model, verified exact)
 
-- sweep8 (9,072 runs): fixed-hold joint grid (hold 90-300, momentum
-  0.4-0.6%, conf 0-0.3%, dip SMA 30/60/90, 0.3-0.7%, turn 5/10).
-  Ceiling $8.49 -- the fixed-hold family is exhausted.
-- sweep9 (600 runs): take-profit 0.5-1.5% / reversal exits on the hold.
-  TP 0.5% + hold 240 -> $11.28. TP 0.8-1.0% is WORSE here ($9.12-9.77).
-- sweep10 (3,456 runs): trend gates (EMA60, SMA240, SMA60), 40bp dip,
-  TP 60/80/100bp, hold 120, 15bp stop-loss. Gates never help; the stop
-  never triggers; best stays $11.28.
-- sweep11 (392 runs): re-entry cooldowns (30/60/120 bars, after TP or
-  any exit) + fine TP (30-60bp). Cooldowns HURT (they block the +$6.04
-  immediate re-buy). Best stays $11.28.
-- sweep12 (90 runs): momentum-only cooldown after TP exits. Also hurts.
-- sweep13 (648 runs): don't-buy-the-top filter (60-bar high), faster
-  momentum (5/8 bars), earlier dip turn (3/5), separate dip TP.
-  Nothing beats $11.28.
+| bot | net PnL | trades | fees | max DD |
+|-----|--------:|-------:|-----:|-------:|
+| **this bot** | **+$7.85** | 5 | $2.42 | **−0.77%** |
+| buy-and-hold | −$25.97 | 1 | $0.79 | −3.94% |
+| momentum | −$23.31 | 1 | $0.68 | −2.33% |
+| ema-cross | −$95.88 | 68 | $26.07 | −10.00% |
+| rsi-bollinger | −$46.52 | 19 | $7.06 | −3.94% |
+| adx-momentum | −$53.35 | 34 | $11.90 | −3.94% |
+| hold-cash | $0.00 | 0 | $0.00 | 0.00% |
 
-Rejected earlier by the first builder (not repeated): 512 EMA-cross
-configs, Donchian breakouts, trailing stops (knife-edge: 0.24% and
-0.36% lose, only 0.30% wins), reversal exits, slow-EMA exits.
+Every kit baseline loses on the dev window. This bot is the only one that
+clears the dev gate (net PnL > $0).
+
+**Trades (decision bar → fill next bar's open):**
+
+1. Buy bar 54 @ $73,910.73 → sell bar 234 @ $74,445.73, **+$6.83** — the
+   momentum entry, held 180 bars through the rise and the chop.
+2. Buy bar 523 @ $73,582.24 → sell bar 703 @ $73,766.55, **+$2.12** — dip
+   entry.
+3. Buy bar 1434 @ $71,922.26 → flattened at window end, **+$0.11** — dip
+   entry on the final bounce.
+
+**Halves:** first half +$8.95 (gross attribution), second half +$0.11. The
+bot sat in cash through the steady second-half decline instead of holding
+through it — exactly the behaviour the gate wants.
+
+**Perturbation test (±20% on every parameter, one at a time):** all 14
+perturbations stay positive. Worst case +$2.78 (hold 144→216 bars range
++$2.78…+$6.09 without dip; with dip worst +$2.90). Momentum threshold
+0.4% / 0.5% / 0.6% → +$6.43 / +$7.85 / +$6.12; confirmation 0.24% / 0.36%
+→ unchanged; momentum window 8 / 12 bars → unchanged; dip depth 0.4% /
+0.6% → +$8.09 / +$6.14; dip window 48 / 72 → +$6.14 / +$8.09; turn-up
+window 8 / 12 → +$8.84 / +$6.43.
+
+**What did not work (tried and discarded):** EMA crosses (512 configs
+searched, best −$2.59 — every one loses; gap-confirmation at the cross bar
+is impossible because the gap is ~0 at a cross), Donchian breakouts (best
+−$2.88), trailing stops (knife-edge, see above), reversal exits (10-bar
+return < −0.15% as exit: −$7.78), no-confirmation momentum (−$12.48 at
+0.45%), slow-EMA exits (only +$4.69 at best, and the 60/75-bar EMAs go
+negative).
+
+## Verification
+
+- **Local grade:** `grade-local --driver process` refuses Python bots on
+  this machine (the process sandbox runs node22 only; Python 3.13 runs
+  only inside Docker, which is not installed here). Instead the bot was
+  verified two independent ways:
+  1. A local simulator that replicates the harness fill model exactly
+     (integer math; 4 bps fee, 2 bps slippage, 1 + spend/depth impact)
+     was validated against the harness on buy-and-hold (**−$25.97, 1
+     trade, fees $0.79, maxDD −3.94% — exact match**) and ema-cross
+     (**−$95.88, 68 trades, fees $26.07, maxDD −10.00% — exact match**).
+     On that simulator this bot scores **+$7.85, 5 trades, maxDD
+     −0.77%**.
+  2. A wire-level driver fed the real `main.py` the exact hello and all
+     1,440 batches (built from the dataset, account/fills from the
+     validated simulator): the bot answered all 1,440 batches with the
+     correct seq, sent exactly the 5 orders the simulator predicted at
+     the same decision points, and exited 0 with empty stderr.
+- **Determinism:** two full wire runs produce byte-identical output.
+- **Think time:** 1,440 batches in ~0.5 s total including startup — far
+  inside the per-batch budget.
+- **Protocol:** one reply per batch, seq echoed, ≤16 orders per reply
+  (at most 1 ever sent), no order after the final batch.
+- **Race-window risk:** the strategy is deliberately low-frequency (5
+  trades / 24h) and sits in cash in a downtrend, so the worst realistic
+  race outcome is a small loss from 1–2 mistimed entries, not a
+  blow-up. The main risk is the opposite: a flat/quiet race window with
+  no 0.5% momentum and no 0.5% dip gives 0 trades and a $0.00 PnL,
+  which fails the ≥1-trade guardrail. The momentum threshold was kept
+  at 0.5% (not raised) partly for that reason.
 
 ## Files
 
-- `variant/main.py` (4,405 B) -- the candidate bot, stdlib only.
-- `variant/vendor/makefun_bars.py` -- byte-identical kit shim copy.
-- `variant/LICENSE` -- MIT.
-- Sweep scripts + results: `sweep8.py` .. `sweep13.py`,
-  `sweep8_results.json`, `sweep9_results.json`, `sweep10_results.json`,
-  `sweep11_results.json`, `sweep12_results.json`, `sweep13_results.json`,
-  `perturb.py`, `wiretest_v.py`, `wire-replies-variant.json`.
-
-NOT touched: `../entry/` and the GitHub repo (the submitted +$7.85
-entry is intact as the fallback). Nothing here is submitted.
+- `main.py` — the bot (stdlib only).
+- `vendor/makefun_bars.py` — kit Python shim, byte-for-byte copy.
+- `README.md` — this file.
+- `LICENSE` — MIT.
